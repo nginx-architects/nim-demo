@@ -138,8 +138,6 @@ services:
     ports:
       - 9101:8080
     restart: always
-    deploy:
-      mode: global
 
   # alertmanager:
   #   networks:
