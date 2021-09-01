@@ -1,9 +1,15 @@
 version: '3.8'
+
 networks:
   overlay:
     ipam:
       config:
         - subnet: 172.20.0.0/24 # /16 network takes up to 10min
+
+volumes:
+  prometheus_data: {}
+  grafana_data: {}
+
 services: 
   # NGINX webservers with NIM Agent
   # Publish a custom nginx-demo hello page
@@ -76,38 +82,94 @@ services:
         - COMPASS_PORT=80
         - COMPASS_TIMEOUT=30
       restart: always
-  # prometheus:
-  #   networks:
-  #       - overlay
-  #   image: prom/prometheus:latest
-  #   container_name: prometheus
-  #   volumes:
-  #     - ./prometheus/etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-  #     - ./prometheus/var/lib/prometheus:/var/lib/prometheus
-  #     - ./prometheus/prometheus:/prometheus
-  #     - ./prometheus/etc/prometheus:/etc/prometheus
-  #     - ./prometheus/etc/prometheus/alert.rules:/etc/prometheus/alert.rules
-  #   command:
-  #     - '--config.file=/etc/prometheus/prometheus.yml'
-  #     - '--web.route-prefix=/'
-  #     - '--storage.tsdb.retention.time=200h'
-  #     - '--web.enable-lifecycle'
-  #   restart: unless-stopped
-  #   ports:
-  #     - '9090:9090'
-  # grafana:
-  #   networks:
-  #       - overlay
-  #   image: grafana:7.5.2
-  #   user: "1000"
-  #   environment:
-  #     - GF_SECURITY_ADMIN_PASSWORD=admin123
-  #   volumes:
-  #     - ./grafana/var/lib/grafana:/var/lib/grafana
-  #   depends_on:
-  #     - prometheus
-  #   ports:
-  #     - '3000:3000'
+  
+  prometheus:
+    networks:
+        - overlay
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/:/etc/prometheus/
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    restart: always
+    ports:
+      - '9090:9090'
+    depends_on:
+      - cadvisor
+    links:
+      - cadvisor:cadvisor
+      - alertmanager:alertmanager
+  
+  node-exporter:
+    networks:
+      - overlay
+    image: prom/node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command: 
+      - '--path.procfs=/host/proc' 
+      - '--path.sysfs=/host/sys'
+      - --collector.filesystem.ignored-mount-points
+      - "^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)"
+    ports:
+      - 9100:9100
+    restart: always
+  
+  cadvisor:
+    networks:
+      - overlay
+    image: gcr.io/cadvisor/cadvisor
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - 9091:8080
+    restart: always
+    deploy:
+      mode: global
+
+  alertmanager:
+    networks:
+      - overlay
+    image: prom/alertmanager
+    ports:
+      - 9093:9093
+    volumes:
+      - ./alertmanager/:/etc/alertmanager/
+    restart: always
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+
+  grafana:
+    networks:
+        - overlay
+    image: grafana/grafana
+    user: "1000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/:/etc/grafana/provisioning/
+    env_file:
+      - ./grafana/config.monitoring
+    depends_on:
+      - prometheus
+    ports:
+      - '3000:3000'
+    restart: always
+
   # NGINX OSS Without NIM Agents
   # There are a lot of versions and containers. This will take a while to pull
   # initially...
